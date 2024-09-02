@@ -1,9 +1,8 @@
-import React, { useState, useCallback } from 'react';
-import { Trash2, Upload, Download, Settings, RotateCw } from 'lucide-react';
+import React, { useEffect, useState, useCallback } from 'react';
+import { Trash2, Upload, Download, Settings, RotateCw, AlertTriangle } from 'lucide-react';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 import { PDFDocument } from 'pdf-lib';
-import { Canvg } from 'canvg'; // Import Canvg
 
 const ImageConverter = () => {
   const [selectedFiles, setSelectedFiles] = useState([]);
@@ -12,17 +11,32 @@ const ImageConverter = () => {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [quality, setQuality] = useState(90);
   const [resize, setResize] = useState({ width: '', height: '' });
+  const [progress, setProgress] = useState(0);
+  const [errorMessage, setErrorMessage] = useState('');
+
+  // Mengirim tinggi konten ke parent iframe
+  useEffect(() => {
+    const handleResize = () => {
+      const height = document.documentElement.scrollHeight;
+      window.parent.postMessage(height, "*");
+    };
+
+    handleResize(); // Mengirim tinggi saat pertama kali komponen di-mount
+
+    window.addEventListener("resize", handleResize); // Mengirim tinggi saat ukuran jendela berubah
+    return () => window.removeEventListener("resize", handleResize); // Membersihkan event listener saat komponen di-unmount
+  }, []);
 
   const handleFileChange = (event) => {
     const files = Array.from(event.target.files);
-    setSelectedFiles(prevFiles => [...prevFiles, ...files]);
+    setSelectedFiles((prevFiles) => [...prevFiles, ...files]);
   };
 
   const handleDrop = useCallback((event) => {
     event.preventDefault();
     event.stopPropagation();
     const files = Array.from(event.dataTransfer.files);
-    setSelectedFiles(prevFiles => [...prevFiles, ...files]);
+    setSelectedFiles((prevFiles) => [...prevFiles, ...files]);
   }, []);
 
   const handleDragOver = (event) => {
@@ -31,53 +45,73 @@ const ImageConverter = () => {
   };
 
   const removeFile = (index) => {
-    setSelectedFiles(prevFiles => prevFiles.filter((_, i) => i !== index));
+    setSelectedFiles((prevFiles) => prevFiles.filter((_, i) => i !== index));
   };
 
-  const convertImages = async () => {
+  const convertImages = async (format = outputFormat) => {
     if (selectedFiles.length === 0) {
       alert('Silakan pilih file terlebih dahulu.');
       return;
     }
 
-    const converted = await Promise.all(selectedFiles.map(async (file) => {
-      const img = await createImageBitmap(file);
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
+    setProgress(0);
+    setErrorMessage('');
 
-      if (resize.width && resize.height) {
-        canvas.width = parseInt(resize.width);
-        canvas.height = parseInt(resize.height);
-      } else {
-        canvas.width = img.width;
-        canvas.height = img.height;
-      }
+    const interval = 100; // Interval untuk update progress (ms)
+    const progressUpdateInterval = setInterval(() => {
+      setProgress((prev) => Math.min(prev + 1, 100)); // Increment progress
+    }, interval);
 
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    try {
+      const converted = await Promise.all(
+        selectedFiles.map(async (file, index) => {
+          const img = await createImageBitmap(file);
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
 
-      let dataUrl;
-      if (outputFormat === 'PDF') {
-        const pdfDoc = await PDFDocument.create();
-        const page = pdfDoc.addPage([canvas.width, canvas.height]);
-        const imgData = canvas.toDataURL('image/png').split(',')[1];
-        const image = await pdfDoc.embedPng(imgData);
-        page.drawImage(image, { x: 0, y: 0, width: canvas.width, height: canvas.height });
-        const pdfBytes = await pdfDoc.save();
-        dataUrl = URL.createObjectURL(new Blob([pdfBytes], { type: 'application/pdf' }));
-      } else if (outputFormat === 'SVG') {
-        const svgString = canvas.toDataURL('image/svg+xml');
-        dataUrl = svgString;
-      } else {
-        dataUrl = canvas.toDataURL(`image/${outputFormat.toLowerCase()}`, quality / 100);
-      }
+          if (resize.width && resize.height) {
+            canvas.width = parseInt(resize.width);
+            canvas.height = parseInt(resize.height);
+          } else {
+            canvas.width = img.width;
+            canvas.height = img.height;
+          }
 
-      return {
-        name: `${file.name.split('.')[0]}.${outputFormat.toLowerCase()}`,
-        dataUrl
-      };
-    }));
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
-    setConvertedFiles(converted);
+          let dataUrl;
+          const formatLower = format.toLowerCase();
+
+          if (formatLower === 'pdf') {
+            const pdfDoc = await PDFDocument.create();
+            const page = pdfDoc.addPage([canvas.width, canvas.height]);
+            const imgData = canvas.toDataURL('image/png').split(',')[1];
+            const image = await pdfDoc.embedPng(imgData);
+            page.drawImage(image, { x: 0, y: 0, width: canvas.width, height: canvas.height });
+            const pdfBytes = await pdfDoc.save();
+            dataUrl = URL.createObjectURL(new Blob([pdfBytes], { type: 'application/pdf' }));
+          } else if (formatLower === 'svg') {
+            const svgString = `<svg xmlns="http://www.w3.org/2000/svg" width="${canvas.width}" height="${canvas.height}"><image href="${canvas.toDataURL('image/png')}" width="${canvas.width}" height="${canvas.height}" /></svg>`;
+            dataUrl = `data:image/svg+xml;base64,${btoa(svgString)}`;
+          } else {
+            dataUrl = canvas.toDataURL(`image/${formatLower}`, quality / 100);
+          }
+
+          return {
+            name: `${file.name.split('.')[0]}.${formatLower}`,
+            dataUrl,
+          };
+        })
+      );
+
+      clearInterval(progressUpdateInterval);
+      setProgress(100);
+      setConvertedFiles(converted);
+    } catch (error) {
+      clearInterval(progressUpdateInterval);
+      setErrorMessage(`Konversi gagal: ${error.message}`);
+      setProgress(0);
+    }
   };
 
   const downloadFile = (file) => {
@@ -96,7 +130,7 @@ const ImageConverter = () => {
     }
 
     const zip = new JSZip();
-    convertedFiles.forEach(file => {
+    convertedFiles.forEach((file) => {
       const base64Data = file.dataUrl.split(',')[1];
       zip.file(file.name, base64Data, { base64: true });
     });
@@ -106,25 +140,49 @@ const ImageConverter = () => {
   };
 
   const removeConvertedFile = (index) => {
-    setConvertedFiles(prevFiles => prevFiles.filter((_, i) => i !== index));
+    setConvertedFiles((prevFiles) => prevFiles.filter((_, i) => i !== index));
   };
 
   return (
-    <div className="max-w-md md:max-w-2xl lg:max-w-4xl xl:max-w-6xl mx-auto mt-10 p-6 bg-white rounded-lg shadow-xl font-overpass">
+    <div className="max-w-md md:max-w-2xl lg:max-w-4xl xl:max-w-6xl mx-auto mt-10 p-6 bg-[#2F2F30] rounded-lg shadow-xl font-overpass">
+      
       <div className="text-center mb-6">
-        <h1 className="text-3xl lg:text-4xl font-bold mb-2">Image Converter</h1>
-        <p className="text-sm text-gray-600">Convert images files into JPG, PNG, SVG or PDF online, for free.</p>
+        <h1 className="text-3xl lg:text-4xl font-bold mb-2 text-white">Image Converter</h1>
+        <p className="text-sm text-gray-300">Convert images online, for free.</p>
       </div>
 
+      <nav className="mb-6">
+        <ul className="flex justify-center gap-4">
+          {['PNG', 'JPEG', 'WEBP', 'PDF', 'SVG'].map((format) => (
+            <li key={format}>
+              <button
+                onClick={() => convertImages(format)}
+                className={`px-4 py-2 rounded-lg font-overpass ${outputFormat === format ? 'bg-[#F7AA01] text-[#2F2F30]' : 'bg-gray-500 text-gray-300'}`}
+              >
+                {format}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </nav>
+
       <div className="mb-6">
-        <h2 className="text-xl lg:text-2xl mb-2 font-overpass">Upload Files</h2>
+        <h2 className="text-xl lg:text-2xl mb-2 font-overpass text-white">Upload Files</h2>
         <div
-          className="border-2 border-dashed border-gray-300 rounded-lg p-4 text-center cursor-pointer bg-gray-100"
+          className="border-2 border-dashed border-gray-600 rounded-lg p-6 text-center cursor-pointer bg-gray-700 flex flex-col justify-center items-center"
           onDrop={handleDrop}
           onDragOver={handleDragOver}
           onClick={() => document.getElementById('fileInput').click()}
         >
-          <p className="text-gray-500">Drag & Drop files here or click to select files</p>
+          <Upload size={48} className="text-gray-300 mb-4" />
+          <p className="text-gray-300">Drag & Drop files here</p>
+          <p className="text-gray-300">or</p>
+          <button
+            onClick={() => document.getElementById('fileInput').click()}
+            className="bg-[#F7AA01] text-[#2F2F30] px-4 py-2 rounded-lg mt-2"
+          >
+            Select Files
+          </button>
           <input
             id="fileInput"
             type="file"
@@ -137,8 +195,8 @@ const ImageConverter = () => {
         {selectedFiles.length > 0 && (
           <div className="flex flex-col mt-4">
             {selectedFiles.map((file, index) => (
-              <div key={index} className="flex justify-between items-center bg-gray-100 p-2 rounded-lg mb-2">
-                <span className="truncate">{file.name}</span>
+              <div key={index} className="flex justify-between items-center bg-gray-700 p-2 rounded-lg mb-2">
+                <span className="truncate text-white">{file.name}</span>
                 <button onClick={() => removeFile(index)} className="text-red-500 ml-2">
                   <Trash2 size={20} />
                 </button>
@@ -149,11 +207,11 @@ const ImageConverter = () => {
       </div>
 
       <div className="mb-6">
-        <h2 className="text-xl lg:text-2xl mb-2 font-overpass">Output Format</h2>
+        <h2 className="text-xl lg:text-2xl mb-2 font-overpass text-white">Output Format</h2>
         <select
           value={outputFormat}
           onChange={(e) => setOutputFormat(e.target.value)}
-          className="w-full p-2 border rounded-lg font-overpass"
+          className="w-full p-2 border rounded-lg bg-gray-700 text-white"
         >
           <option>PNG</option>
           <option>JPEG</option>
@@ -164,87 +222,117 @@ const ImageConverter = () => {
       </div>
 
       <div className="flex justify-between items-center mb-6">
+  <button
+    onClick={() => downloadAllAsZip()}
+    className="bg-[#F7AA01] text-[#2F2F30] px-4 py-2 rounded-lg"
+  >
+    Download All as ZIP
+  </button>
+  <button
+    onClick={() => convertImages(outputFormat)}
+    className="bg-[#F7AA01] text-[#2F2F30] px-4 py-2 rounded-lg"
+  >
+    Convert
+  </button>
+</div>
+
+      <div className="flex justify-center mb-6">
         <button
           onClick={() => setShowAdvanced(!showAdvanced)}
-          className="flex items-center text-blue-500 font-overpass"
+          className="flex items-center gap-2 text-[#F7AA01]"
         >
-          <Settings size={20} className="mr-2" />
-          {showAdvanced ? 'Hide' : 'Show'} Advanced Settings
-        </button>
-        <button
-          onClick={convertImages}
-          className="px-4 py-2 bg-blue-500 text-white rounded-lg flex items-center font-overpass"
-        >
-          <RotateCw size={20} className="mr-2" />
-          Convert
+          <Settings size={20} />
+          Advanced Settings
         </button>
       </div>
 
       {showAdvanced && (
-        <div className="mb-6 p-4 bg-gray-100 rounded-lg">
-          <h3 className="text-lg lg:text-xl font-semibold mb-2 font-overpass">Advanced Settings</h3>
-          <div className="mb-4">
-            <label className="block mb-1 font-overpass">Quality (JPEG/WEBP)</label>
-            <input
-              type="range"
-              min="1"
-              max="100"
-              value={quality}
-              onChange={(e) => setQuality(e.target.value)}
-              className="w-full"
-            />
-            <span>{quality}%</span>
-          </div>
-          <div>
-            <label className="block mb-1 font-overpass">Resize</label>
-            <div className="flex gap-2">
+        <div className="mb-6">
+          <h2 className="text-xl lg:text-2xl mb-2 font-overpass text-white">Advanced Settings</h2>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block mb-2 text-white">Quality (JPEG/WebP)</label>
               <input
-                type="number"
-                placeholder="Width"
-                value={resize.width}
-                onChange={(e) => setResize({...resize, width: e.target.value})}
-                className="w-1/2 p-2 border rounded font-overpass"
+                type="range"
+                min="1"
+                max="100"
+                value={quality}
+                onChange={(e) => setQuality(e.target.value)}
+                className="w-full bg-gray-700"
               />
-              <input
-                type="number"
-                placeholder="Height"
-                value={resize.height}
-                onChange={(e) => setResize({...resize, height: e.target.value})}
-                className="w-1/2 p-2 border rounded font-overpass"
-              />
+              <span className="text-white">{quality}%</span>
+            </div>
+            <div>
+              <label className="block mb-2 text-white">Resize</label>
+              <div className="flex gap-2">
+                <input
+                  type="number"
+                  placeholder="Width"
+                  value={resize.width}
+                  onChange={(e) => setResize({ ...resize, width: e.target.value })}
+                  className="w-full p-2 border rounded-lg bg-gray-700 text-white"
+                />
+                <input
+                  type="number"
+                  placeholder="Height"
+                  value={resize.height}
+                  onChange={(e) => setResize({ ...resize, height: e.target.value })}
+                  className="w-full p-2 border rounded-lg bg-gray-700 text-white"
+                />
+              </div>
             </div>
           </div>
         </div>
       )}
 
-      {convertedFiles.length > 0 && (
-        <div>
-          <h2 className="text-xl lg:text-2xl mb-4 font-overpass">Converted Files:</h2>
-          <div className="flex justify-between items-center mb-4">
-            <button
-              onClick={downloadAllAsZip}
-              className="px-4 py-2 bg-green-500 text-white rounded-lg font-overpass"
-            >
-              Download All as ZIP
-            </button>
+      {progress > 0 && (
+        <div className="mb-6">
+          <div className="relative w-full bg-gray-200 rounded-lg overflow-hidden h-4">
+            <div
+              className="absolute top-0 left-0 h-full bg-[#F7AA01] transition-all duration-300 ease-in-out"
+              style={{ width: `${progress}%` }}
+            />
           </div>
-          <ul>
+          <p className="text-center mt-2 text-white">{progress}%</p>
+        </div>
+      )}
+
+      {errorMessage && (
+        <div className="bg-red-100 text-red-700 p-4 rounded-lg mb-6 flex items-center gap-2">
+          <AlertTriangle size={24} />
+          <span>{errorMessage}</span>
+        </div>
+      )}
+
+      {convertedFiles.length > 0 && (
+        <div className="mb-6">
+          <h2 className="text-xl lg:text-2xl mb-2 font-overpass text-white">Converted Files</h2>
+          <div className="flex flex-col">
             {convertedFiles.map((file, index) => (
-              <li key={index} className="flex justify-between items-center bg-gray-100 p-2 rounded-lg mb-2">
-                <span className="truncate">{file.name}</span>
-                <div className="flex items-center">
-                  <button onClick={() => downloadFile(file)} className="text-blue-500 ml-2">
+              <div key={index} className="flex justify-between items-center bg-gray-700 p-2 rounded-lg mb-2">
+                <span className="truncate text-white">{file.name}</span>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => downloadFile(file)} className="text-[#F7AA01]">
                     <Download size={20} />
                   </button>
-                  <button onClick={() => removeConvertedFile(index)} className="text-red-500 ml-2">
+                  <button onClick={() => removeConvertedFile(index)} className="text-red-500">
                     <Trash2 size={20} />
                   </button>
                 </div>
-              </li>
+              </div>
             ))}
-          </ul>
+          </div>
         </div>
       )}
+
+      <div className="flex justify-center">
+        <button
+          onClick={() => window.location.reload()}
+          className="bg-gray-500 text-white px-4 py-2 rounded-lg"
+        >
+          <RotateCw size={20} />
+        </button>
+      </div>
     </div>
   );
 };
