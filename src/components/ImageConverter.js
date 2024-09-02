@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Trash2, Upload, Download, Settings, RotateCw, AlertTriangle } from 'lucide-react';
+import { Trash2, Upload, Download, Settings, RotateCw, AlertTriangle, FileType, Archive } from 'lucide-react';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 import { PDFDocument } from 'pdf-lib';
@@ -13,19 +13,19 @@ const ImageConverter = () => {
   const [resize, setResize] = useState({ width: '', height: '' });
   const [progress, setProgress] = useState(0);
   const [errorMessage, setErrorMessage] = useState('');
+  const [isConverting, setIsConverting] = useState(false);
 
-  // Mengirim tinggi konten ke parent iframe
   useEffect(() => {
     const handleResize = () => {
       const height = document.documentElement.scrollHeight;
       window.parent.postMessage(height, "*");
     };
 
-    handleResize(); // Mengirim tinggi saat pertama kali komponen di-mount
+    handleResize();
 
-    window.addEventListener("resize", handleResize); // Mengirim tinggi saat ukuran jendela berubah
-    return () => window.removeEventListener("resize", handleResize); // Membersihkan event listener saat komponen di-unmount
-  }, [convertedFiles, progress]); // Menambahkan dependensi agar resize diperbarui saat file dikonversi
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [convertedFiles, progress]);
 
   const handleFileChange = (event) => {
     const files = Array.from(event.target.files);
@@ -56,10 +56,11 @@ const ImageConverter = () => {
 
     setProgress(0);
     setErrorMessage('');
+    setIsConverting(true);
 
-    const interval = 100; // Interval untuk update progress (ms)
+    const interval = 100;
     const progressUpdateInterval = setInterval(() => {
-      setProgress((prev) => Math.min(prev + 1, 100)); // Increment progress
+      setProgress((prev) => Math.min(prev + 1, 100));
     }, interval);
 
     try {
@@ -111,6 +112,8 @@ const ImageConverter = () => {
       clearInterval(progressUpdateInterval);
       setErrorMessage(`Konversi gagal: ${error.message}`);
       setProgress(0);
+    } finally {
+      setIsConverting(false);
     }
   };
 
@@ -151,13 +154,15 @@ const ImageConverter = () => {
         <p className="text-sm text-gray-300">Convert images online, for free.</p>
       </div>
 
-      <nav className="mb-6">
-        <ul className="flex justify-center gap-4">
+      <nav className="mb-6 overflow-x-auto">
+        <ul className="flex justify-center gap-2 md:gap-4 whitespace-nowrap">
           {['PNG', 'JPEG', 'WEBP', 'PDF', 'SVG'].map((format) => (
             <li key={format}>
               <button
                 onClick={() => convertImages(format)}
-                className={`px-4 py-2 rounded-lg font-overpass ${outputFormat === format ? 'bg-[#F7AA01] text-[#2F2F30]' : 'bg-gray-500 text-gray-300'}`}
+                className={`px-3 py-1 md:px-4 md:py-2 rounded-lg font-overpass text-sm md:text-base ${
+                  outputFormat === format ? 'bg-[#F7AA01] text-[#2F2F30]' : 'bg-gray-500 text-gray-300'
+                } hover:bg-[#F7AA01] hover:text-[#2F2F30] transition-colors duration-200`}
               >
                 {format}
               </button>
@@ -179,8 +184,9 @@ const ImageConverter = () => {
           <p className="text-gray-300">or</p>
           <button
             onClick={() => document.getElementById('fileInput').click()}
-            className="bg-[#F7AA01] text-[#2F2F30] px-4 py-2 rounded-lg mt-2"
+            className="bg-[#F7AA01] text-[#2F2F30] px-4 py-2 rounded-lg mt-2 flex items-center gap-2 hover:bg-[#F7AA01]/80 transition-colors duration-200"
           >
+            <Upload size={20} />
             Select Files
           </button>
           <input
@@ -221,28 +227,34 @@ const ImageConverter = () => {
         </select>
       </div>
 
-      <div className="flex justify-between items-center mb-6">
-        <button
-          onClick={() => downloadAllAsZip()}
-          className="bg-[#F7AA01] text-[#2F2F30] px-4 py-2 rounded-lg"
-        >
-          Download All as ZIP
-        </button>
-        <button
-          onClick={() => convertImages(outputFormat)}
-          className="bg-[#F7AA01] text-[#2F2F30] px-4 py-2 rounded-lg"
-        >
-          Convert
-        </button>
-      </div>
-
-      <div className="flex justify-center mb-6">
+      <div className="flex flex-col sm:flex-row justify-between items-center mb-6 gap-4">
         <button
           onClick={() => setShowAdvanced(!showAdvanced)}
-          className="flex items-center gap-2 text-[#F7AA01]"
+          className="flex items-center gap-2 text-[#F7AA01] hover:text-[#F7AA01]/80 transition-colors duration-200"
         >
           <Settings size={20} />
           Advanced Settings
+        </button>
+        
+        {convertedFiles.length > 0 && (
+          <button
+            onClick={() => downloadAllAsZip()}
+            className="bg-[#F7AA01] text-[#2F2F30] px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-[#F7AA01]/80 transition-colors duration-200"
+          >
+            <Archive size={20} />
+            Download All as ZIP
+          </button>
+        )}
+        
+        <button
+          onClick={() => convertImages(outputFormat)}
+          disabled={isConverting}
+          className={`bg-[#F7AA01] text-[#2F2F30] px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-[#F7AA01]/80 transition-colors duration-200 ${
+            isConverting ? 'opacity-50 cursor-not-allowed' : ''
+          }`}
+        >
+          <FileType size={20} />
+          {isConverting ? 'Converting...' : 'Convert'}
         </button>
       </div>
 
